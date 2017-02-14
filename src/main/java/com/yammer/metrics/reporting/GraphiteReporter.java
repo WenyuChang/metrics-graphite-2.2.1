@@ -101,7 +101,7 @@ public class GraphiteReporter extends AbstractPollingReporter implements MetricP
      * @param prefix          the string which is prepended to all metric names
      * @param predicate       filters metrics to be reported
      */
-    public static void enable(MetricsRegistry metricsRegistry, long period, TimeUnit unit, String host, int port, String prefix, MetricPredicate predicate) {
+    public static void enable(final MetricsRegistry metricsRegistry, final long period, final TimeUnit unit, final String host, final int port, final String prefix, final MetricPredicate predicate) {
         try {
             final GraphiteReporter reporter = new GraphiteReporter(metricsRegistry,
                                                                    prefix,
@@ -110,6 +110,25 @@ public class GraphiteReporter extends AbstractPollingReporter implements MetricP
                                                                                              port),
                                                                    Clock.defaultClock());
             reporter.start(period, unit);
+
+            // Add Shutdown hook
+            Runtime.getRuntime().addShutdownHook(new Thread() {
+                public void run() {
+                    LOG.error("Graphite Reporter is shutdown...trying to restart reporter again.");
+                    try {
+                        final GraphiteReporter reporter = new GraphiteReporter(metricsRegistry,
+                                prefix,
+                                predicate,
+                                new DefaultSocketProvider(host,
+                                        port),
+                                Clock.defaultClock());
+                        reporter.start(period, unit);
+                        LOG.error("Graphite Reporter restarted again.");
+                    } catch (Exception e) {
+                        LOG.error("Error creating/starting Graphite reporter:", e);
+                    }
+                }
+            });
         } catch (Exception e) {
             LOG.error("Error creating/starting Graphite reporter:", e);
         }
@@ -209,7 +228,9 @@ public class GraphiteReporter extends AbstractPollingReporter implements MetricP
         Socket socket = null;
         try {
             socket = this.socketProvider.get();
+            LOG.debug("[" + cycleUUID + " ] Initialize new socket instance " + socket.toString());
             writer = new BufferedWriter(new OutputStreamWriter(socket.getOutputStream()));
+            LOG.debug("[" + cycleUUID + " ] Initialize new buffered writer instance " + writer.toString());
 
             final long epoch = clock.time() / 1000;
             if (this.printVMMetrics) {
@@ -217,6 +238,7 @@ public class GraphiteReporter extends AbstractPollingReporter implements MetricP
             }
             printRegularMetrics(epoch);
             writer.flush();
+            LOG.debug("[" + cycleUUID + " ] Finish writer flushing");
         } catch (Exception e) {
             if (LOG.isDebugEnabled()) {
                 LOG.debug("Error writing to Graphite", e);
@@ -232,8 +254,10 @@ public class GraphiteReporter extends AbstractPollingReporter implements MetricP
             }
         } finally {
             if (socket != null) {
+                LOG.debug("[" + cycleUUID + " ] Inside finally block, and socker is not null");
                 try {
                     socket.close();
+                    LOG.debug("[" + cycleUUID + " ] Inside finally block, and socker is set closed");
                 } catch (Exception e) {
                     LOG.error("Error while closing socket:", e);
                 }
@@ -246,12 +270,22 @@ public class GraphiteReporter extends AbstractPollingReporter implements MetricP
     protected void printRegularMetrics(final Long epoch) {
         LOG.debug("[" + cycleUUID + " ] Start to push regular metrics");
 
+        long startTime = System.currentTimeMillis(); //fetch starting time
         for (Entry<String,SortedMap<MetricName,Metric>> entry : getMetricsRegistry().groupedMetrics(
                 predicate).entrySet()) {
             LOG.trace("[" + cycleUUID + " ] Inside for first loop for metrics: " + entry.getKey());
-
+            if (System.currentTimeMillis() - startTime > 58000) {
+                LOG.warn("Processing too much time...break in the first loop");
+                // Break loop as it already processing too much time
+                break;
+            }
             for (Entry<MetricName, Metric> subEntry : entry.getValue().entrySet()) {
                 LOG.trace("[" + cycleUUID + " ] Inside for second loop for metrics: " + subEntry.getKey().toString());
+                if (System.currentTimeMillis() - startTime > 58000) {
+                    LOG.warn("Processing too much time...break in the second loop");
+                    // Break loop as it already processing too much time
+                    break;
+                }
 
                 final Metric metric = subEntry.getValue();
                 if (metric != null) {
@@ -289,8 +323,11 @@ public class GraphiteReporter extends AbstractPollingReporter implements MetricP
             writer.write(value);
             writer.write(' ');
             writer.write(Long.toString(timestamp));
-            writer.write('\n');
+            LOG.trace("[" + cycleUUID + " ] Sending " + sanitizeString(name) + " with value " + value + " to Graphite");
+            // writer.write('\n');
+            ((BufferedWriter) writer).newLine();
             writer.flush();
+            LOG.trace("[" + cycleUUID + " ] Finish flusing " + sanitizeString(name) + " with value " + value + " to Graphite");
         } catch (Exception e) {
             LOG.error("Error sending to Graphite:", e);
         }
@@ -315,16 +352,19 @@ public class GraphiteReporter extends AbstractPollingReporter implements MetricP
 
     @Override
     public void processGauge(MetricName name, Gauge<?> gauge, Long epoch) throws IOException {
+        LOG.debug("[" + cycleUUID + " ] Sending Gauge: " + sanitizeName(name) + " [" + gauge.value() + "]");
         sendObjToGraphite(epoch, sanitizeName(name), "value", gauge.value());
     }
 
     @Override
     public void processCounter(MetricName name, Counter counter, Long epoch) throws IOException {
+        LOG.debug("[" + cycleUUID + " ] Sending Counter: " + sanitizeName(name) + " [" + counter.count() + "]");
         sendInt(epoch, sanitizeName(name), "count", counter.count());
     }
 
     @Override
     public void processMeter(MetricName name, Metered meter, Long epoch) throws IOException {
+        LOG.debug("[" + cycleUUID + " ] Sending Meter: " + sanitizeName(name));
         final String sanitizedName = sanitizeName(name);
         sendInt(epoch, sanitizedName, "count", meter.count());
         sendFloat(epoch, sanitizedName, "meanRate", meter.meanRate());
@@ -335,6 +375,7 @@ public class GraphiteReporter extends AbstractPollingReporter implements MetricP
 
     @Override
     public void processHistogram(MetricName name, Histogram histogram, Long epoch) throws IOException {
+        LOG.debug("[" + cycleUUID + " ] Sending Histogram: " + sanitizeName(name));
         final String sanitizedName = sanitizeName(name);
         sendSummarizable(epoch, sanitizedName, histogram);
         sendSampling(epoch, sanitizedName, histogram);
@@ -342,6 +383,7 @@ public class GraphiteReporter extends AbstractPollingReporter implements MetricP
 
     @Override
     public void processTimer(MetricName name, Timer timer, Long epoch) throws IOException {
+        LOG.debug("[" + cycleUUID + " ] Sending Timer: " + sanitizeName(name) + " [" + timer.toString() + "]");
         processMeter(name, timer, epoch);
         final String sanitizedName = sanitizeName(name);
         sendSummarizable(epoch, sanitizedName, timer);
