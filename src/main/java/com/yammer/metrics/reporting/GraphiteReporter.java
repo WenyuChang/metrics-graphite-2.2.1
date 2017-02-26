@@ -232,6 +232,8 @@ public class GraphiteReporter extends AbstractPollingReporter implements MetricP
                     writer.flush();
                 } catch (Exception e1) {
                     LOG.error("Exception while flushing writer:", e1);
+                } catch (Error e1) {
+                    LOG.error("Error while flushing writer:", e1);
                 }
             }
         } catch (Error err) {
@@ -242,6 +244,8 @@ public class GraphiteReporter extends AbstractPollingReporter implements MetricP
                     writer.close();
                     writer = null;
                 } catch (Exception e1) {
+                    LOG.error("Error while flushing writer:", e1);
+                } catch (Error e1) {
                     LOG.error("Error while flushing writer:", e1);
                 }
             }
