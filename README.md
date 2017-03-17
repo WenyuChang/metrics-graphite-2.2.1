@@ -1,2 +1,2 @@
 # metrics-graphite-2.2.1
-Improved graphite metrics reporter project
+Fixed bugs: It stops sending metrics to graphite after Cassandra throw AssertError
